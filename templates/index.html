@@ -1,0 +1,40 @@
+
+<!DOCTYPE html>
+<html>
+<link href="/static/bootstrap.min.css" rel="stylesheet" media="screen">
+<head>
+ <title></title>
+</head>
+<body>
+<style>
+
+ td {
+        width: 150px;
+        text-align: center;
+        border: 1px solid black;
+        padding: 5px;
+      }
+      th {
+
+             text-align: center;
+
+           }
+</style>
+<table style="width:90%">
+  <thead>
+    <tr>
+        <th text-align="center">Tweet ID</th>
+        <th text-align="center">Tweet Content</th>
+    </tr>
+    </thead>
+    <tbody>
+     {% for id in gossip_ids %}
+            <tr>
+                <td><a href='/v_timestamp/{{id}}'>{{id}}</a></td>
+                <td>{{gosscontents[loop.index0]}}</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</body>
+</html>
