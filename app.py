@@ -318,13 +318,28 @@ def tokens_to_tensor(tokens, dictionary, one_long = False, one_long_if_pad = Fal
 
 corpus = pickle.load(open("corpus.pkl","rb"))
 reference = pickle.load(open("reference.pkl","rb"))
-ldas = pickle.load(open("ldas.pkl","rb"))
+# ldas = pickle.load(open("ldas.pkl","rb"))
 
 
 gossip_ids = pickle.load(open("gossip_ids.pkl","rb"))
 gosscontents = pickle.load(open("gosscontents.pkl","rb"))
 gosscoms = pickle.load(open("gosscoms.pkl","rb"))
 data_dic = pickle.load(open("data_dic.pkl","rb"))
+
+
+articles_tensor_format = []
+for articlee in gosscontents:
+   
+    articlee = nltk.word_tokenize(articlee.lower())
+    articlee = tokens_to_tensor(articlee, word2idx_dict, one_long=True)
+    articles_tensor_format.append(articlee.view(1, -1))
+article_token_list = [articlee.tolist() for articlee in articles_tensor_format] # torch.cat(self.contexts, dim=0).tolist()
+contexts_matrix = word_token_list2feature_vector(article_token_list, len(word2idx_dict))
+ldas = []
+for num_clusters in range(2, 20, 5):
+    lda = LatentDirichletAllocation(n_components=num_clusters)
+    lda.fit(contexts_matrix)
+    ldas.append(lda)
 
 app = Flask(__name__)
 app.secret_key = ".."
