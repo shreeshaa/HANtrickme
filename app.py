@@ -621,7 +621,8 @@ def predict():
 
 
 if __name__ == "__main__":
-    app.secret_key = ".."
+#     app.secret_key = ".."
+    app.run()
 
 #     app.run(threaded=False)
 
