@@ -589,17 +589,29 @@ def predict():
         org_prob = org_vals[1]
 
     # print(session['userlist'])
+    
+    with open("text.txt", "a") as myfile:
+        myfile.write(session['user'])
+        myfile.write(",")
+        myfile.write(str(id))
+        myfile.write(",")
+        myfile.write(str(coms) )
+        myfile.write(",")
+        myfile.write(str(new_comm))
+        myfile.write(",")
+        myfile.write(str(probab)) 
+        myfile.write("\n")
 
-    print(session['user'])
-    print(",")
-    print(str(id))
-    print(",")
-    print(str(coms) )
-    print(",")
-    print(str(new_comm))
-    print(",")
-    print(str(probab)) 
-    print("\n")
+#     print(session['user'])
+#     print(",")
+#     print(str(id))
+#     print(",")
+#     print(str(coms) )
+#     print(",")
+#     print(str(new_comm))
+#     print(",")
+#     print(str(probab)) 
+#     print("\n")
     com1 = data_dic[id]['com1']
     com2 = data_dic[id]['com2']
     com3 = data_dic[id]['com3']
