@@ -590,7 +590,7 @@ def predict():
 
     # print(session['userlist'])
     
-    with open("D:\home\site\repository\text.txt", "a") as myfile:
+    with open("text.txt", "a") as myfile:
         myfile.write(session['user'])
         myfile.write(",")
         myfile.write(str(id))
