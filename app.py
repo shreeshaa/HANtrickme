@@ -19,11 +19,224 @@ from sklearn.decomposition import LatentDirichletAllocation
 from scipy.spatial.distance import cosine
 
 from torch.autograd import Variable
+import dill
+import spacy
+# spacy.load('en')
 if_linear_embedding = True
 max_len_seq_lstm = 20
 max_seq_len = 30
 
 
+import pickle
+
+
+
+# HAN_vocab = dill.load(open("vocab.pickle", "rb"))
+
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+from fastai.text import Tokenizer, Vocab
+# from fastai.text.all import *
+
+from torch.utils.data import TensorDataset, DataLoader
+
+import os
+n_cpus = os.cpu_count()
+use_cuda = False
+
+
+class HierAttnNet(nn.Module):
+    def __init__(
+        self,
+        vocab_size,
+        maxlen_sent,
+        maxlen_doc,
+        word_hidden_dim=32,
+        sent_hidden_dim=32,
+        padding_idx=1,
+        embed_dim=50,
+        embedding_matrix=None,
+        num_class=2,
+    ):
+        super(HierAttnNet, self).__init__()
+
+        self.word_hidden_dim = word_hidden_dim
+
+        self.wordattnnet = WordAttnNet(
+            vocab_size=vocab_size,
+            hidden_dim=word_hidden_dim,
+            padding_idx=padding_idx,
+            embed_dim=embed_dim,
+            embedding_matrix=embedding_matrix,
+        )
+
+        self.sentattnnet = SentAttnNet(
+            word_hidden_dim=word_hidden_dim,
+            sent_hidden_dim=sent_hidden_dim,
+            padding_idx=padding_idx,
+        )
+
+        self.fc = nn.Linear(sent_hidden_dim * 2, num_class)
+
+    def forward(self, X):
+        x = X.permute(1, 0, 2)
+        word_h_n = nn.init.zeros_(torch.Tensor(2, X.shape[0], self.word_hidden_dim))
+        if use_cuda:
+            word_h_n = word_h_n.cuda()
+        # alpha and s Tensor Lists
+        word_a_list, word_s_list = [], []
+        for sent in x:
+            word_a, word_s, word_h_n = self.wordattnnet(sent, word_h_n)
+            word_a_list.append(word_a)
+            word_s_list.append(word_s)
+        # Importance attention weights per word in sentence
+        self.sent_a = torch.cat(word_a_list, 1)
+        # Sentences representation
+        sent_s = torch.cat(word_s_list, 1)
+        # Importance attention weights per sentence in doc and document representation
+        self.doc_a, doc_s = self.sentattnnet(sent_s)
+        return self.fc(doc_s)
+
+
+class WordAttnNet(nn.Module):
+    def __init__(
+        self,
+        vocab_size,
+        hidden_dim=32,
+        padding_idx=1,
+        embed_dim=50,
+        embedding_matrix=None,
+    ):
+        super(WordAttnNet, self).__init__()
+
+        if isinstance(embedding_matrix, np.ndarray):
+            self.word_embed = nn.Embedding(
+                vocab_size, embedding_matrix.shape[1], padding_idx=padding_idx
+            )
+            self.word_embed.weight = nn.Parameter(torch.Tensor(embedding_matrix))
+            embed_dim = embedding_matrix.shape[1]
+        else:
+            self.word_embed = nn.Embedding(vocab_size, embed_dim, padding_idx=padding_idx)
+
+        self.rnn = nn.GRU(embed_dim, hidden_dim, bidirectional=True, batch_first=True)
+
+        self.word_attn = AttentionWithContext(hidden_dim * 2)
+
+    def forward(self, X, h_n):
+        embed = self.word_embed(X.long())
+        h_t, h_n = self.rnn(embed, h_n)
+        a, s = self.word_attn(h_t)
+        return a, s.unsqueeze(1), h_n
+
+
+class AttentionWithContext(nn.Module):
+    def __init__(self, hidden_dim):
+        super(AttentionWithContext, self).__init__()
+
+        self.attn = nn.Linear(hidden_dim, hidden_dim)
+        self.contx = nn.Linear(hidden_dim, 1, bias=False)
+
+    def forward(self, inp):
+
+        u = torch.tanh_(self.attn(inp))
+
+        a = F.softmax(self.contx(u), dim=1)
+         
+        s = (a * inp).sum(1)
+       
+        return a.permute(0, 2, 1), s
+
+class Attention(nn.Module):
+    def __init__(self, hidden_dim, seq_len):
+        super(Attention, self).__init__()
+
+        self.hidden_dim = hidden_dim
+        self.seq_len = seq_len
+        self.weight = nn.Parameter(nn.init.kaiming_normal_(torch.Tensor(hidden_dim, 1)))
+        self.bias = nn.Parameter(torch.zeros(seq_len))
+
+    def forward(self, inp):
+        # 1. Matrix Multiplication
+        x = inp.contiguous().view(-1, self.hidden_dim)
+        u = torch.tanh_(torch.mm(x, self.weight).view(-1, self.seq_len) + self.bias)
+        # 2. Softmax on 'u_{it}' directly
+        a = F.softmax(u, dim=1)
+        # 3. Braodcasting and out
+        s = (inp * torch.unsqueeze(a, 2)).sum(1)
+        return a, s
+
+class SentAttnNet(nn.Module):
+    def __init__(
+        self, word_hidden_dim=32, sent_hidden_dim=32, padding_idx=1
+    ):
+        super(SentAttnNet, self).__init__()
+
+        self.rnn = nn.GRU(
+            word_hidden_dim * 2, sent_hidden_dim, bidirectional=True, batch_first=True
+        )
+
+        self.sent_attn = AttentionWithContext(sent_hidden_dim * 2)
+
+    def forward(self, X):
+        h_t, h_n = self.rnn(X)
+        a, v = self.sent_attn(h_t)
+        return a.permute(0,2,1), v
+
+HAN_model = HierAttnNet(
+    vocab_size=5000,
+    maxlen_sent=20,
+    maxlen_doc=5,
+    word_hidden_dim=32,
+    sent_hidden_dim=32,
+    padding_idx=1,
+    embed_dim=50,
+    # weight_drop=0.0,
+    # embed_drop=0.0,
+    # locked_drop=0.0,
+    # last_drop=0.0,
+    embedding_matrix=None,
+    num_class=2
+    )
+
+def adjust_weights_dict(weights_dict):
+    new_dict = {}
+    for k, v in weights_dict.items():
+        if '_raw' not in k:
+            new_k = k.replace('module.', '')
+            new_dict[new_k] = v
+    return new_dict
+
+
+trained_weights_raw = torch.load("HANmodel.pt",map_location=torch.device('cpu'))
+trained_weights = adjust_weights_dict(trained_weights_raw)
+HAN_model.load_state_dict(trained_weights)
+
+
+def get_predictions_and_attn_weights(model, eval_loader):
+    model.eval()
+    preds, sent_a, doc_a = [], [], []
+    with torch.no_grad():
+        for data, target in tqdm(eval_loader):
+            X = data.cuda() if use_cuda else data
+            y_pred = model(X)
+            preds.append(y_pred)
+            sent_a.append(model.sent_a)
+            doc_a.append(model.doc_a)
+    return preds, sent_a, doc_a
+
+def adjust_weights_dict(weights_dict):
+    new_dict = {}
+    for k, v in weights_dict.items():
+        if '_raw' not in k:
+            new_k = k.replace('module.', '')
+            new_dict[new_k] = v
+    return new_dict
+
+from tqdm import tqdm
 
 class CONFIG:
     def __init__(self):
@@ -120,6 +333,35 @@ def tokens_to_tensor(tokens, dictionary, one_long = False, one_long_if_pad = Fal
             tensor.append(sent_ten[:cfg.max_seq_len])
         return torch.LongTensor(tensor)
 
+def pad_sequences(seq, maxlen, pad_first=True, pad_idx=1):
+    if len(seq) >= maxlen:
+        res = np.array(seq[-maxlen:]).astype("int32")
+        return res
+    else:
+        res = np.zeros(maxlen, dtype="int32") + pad_idx
+        if pad_first:
+            res[-len(seq) :] = seq
+        else:
+            res[: len(seq) :] = seq
+        return res
+
+
+def pad_nested_sequences(
+    seq, maxlen_sent, maxlen_doc, pad_sent_first=True, pad_doc_first=False, pad_idx=1
+):
+    seq = [s for s in seq if len(s) >= 1]
+    if len(seq) == 0:
+        return np.array([[pad_idx] * maxlen_sent] * maxlen_doc).astype("int32")
+    seq = [pad_sequences(s, maxlen_sent, pad_sent_first, pad_idx) for s in seq]
+    if len(seq) >= maxlen_doc:
+        return np.array(seq[:maxlen_doc])
+    else:
+        res = np.array([[pad_idx] * maxlen_sent] * maxlen_doc).astype("int32")
+        if pad_doc_first:
+            res[-len(seq) :] = seq
+        else:
+            res[: len(seq) :] = seq
+        return res
 
 dataset = "GOSSIP"
 word2idx_dict = pickle.load(open(f"{dataset}_word2idx_dict.pkl", "rb"))
@@ -443,22 +685,86 @@ def v_timestamp(id):
     
     art = data_dic[id]['content']
 
-    org_article = nltk.word_tokenize(art)
-    org_comment = [nltk.word_tokenize(each_comment)  for each_comment in comments]
+    # org_article = nltk.word_tokenize(art)
+    # org_comment = [nltk.word_tokenize(each_comment)  for each_comment in comments]
 
-    org_article = tokens_to_tensor(org_article, word2idx_dict, one_long=True).view(1, -1).to(device)
-    org_comment = tokens_to_tensor(org_comment, word2idx_dict).to(device)
+    # org_article = tokens_to_tensor(org_article, word2idx_dict, one_long=True).view(1, -1).to(device)
+    # org_comment = tokens_to_tensor(org_comment, word2idx_dict).to(device)
 
-    org_article = F.one_hot(org_article, len(word2idx_dict)).float()
-    org_comment = F.one_hot(org_comment, len(word2idx_dict)).float()
-    org_ret = F.softmax(clf_seq([org_article, org_comment]))
-    org_vals = org_ret.detach().numpy()[0]
-    if org_vals[0]>org_vals[1]:
+    # org_article = F.one_hot(org_article, len(word2idx_dict)).float()
+    # org_comment = F.one_hot(org_comment, len(word2idx_dict)).float()
+    # org_ret = F.softmax(clf_seq([org_article, org_comment]))
+    # org_vals = org_ret.detach().numpy()[0]
+    # if org_vals[0]>org_vals[1]:
+    #     org_class = "Not Misinformation"
+    #     org_prob = org_vals[0]
+    # else:
+    #     org_class = "Misinformation"
+    #     org_prob = org_vals[1]
+
+    tok_func = spacy.load("en_core_web_sm")
+    n_cpus = os.cpu_count()
+    bsz = 100
+    texts_sents = []
+    com_sents = []
+    for doc in tok_func.pipe(art, n_process=n_cpus, batch_size=bsz):
+        sents = [str(s) for s in list(doc.sents)]
+        texts_sents.append(sents)
+
+    for val in tok_func.pipe(comments, n_process=n_cpus, batch_size=bsz):
+        coms = [str(s) for s in list(val.sents)]
+        com_sents.append(coms)
+
+    fin = []
+    for i in range(len(com_sents)):
+        fin.append(texts_sents[i][:7-len(com_sents[-min(5,len(com_sents[i])):])]+com_sents[i][-min(5,len(com_sents[i])):])
+
+
+    testt = [fin]
+    print(testt)
+
+    all_sents = [s for sents in testt for s in sents]
+    texts_length = [0] + [len(s) for s in testt]
+    range_idx = [sum(texts_length[: i + 1]) for i in range(len(texts_length))]
+
+    tok = Tokenizer()
+
+    sents_tokens = tok.process_all(all_sents)
+
+    sents_length = [len(s) for s in sents_tokens]
+
+    vocab = Vocab.create(sents_tokens, max_vocab=5000, min_freq=5)
+
+    sents_numz = [vocab.numericalize(s) for s in sents_tokens]
+
+    texts_numz = [sents_numz[range_idx[i] : range_idx[i + 1]] for i in range(len(range_idx[:-1]))]
+
+    q=0.8
+    maxlen_sent = int(np.quantile(sents_length, q=q))
+    maxlen_doc  = int(np.quantile(texts_length[1:], q=q))
+
+    padded_test = np.stack([pad_nested_sequences(r, maxlen_sent, maxlen_doc) for r in texts_numz], axis=0)
+
+
+    test_set = TensorDataset(
+        torch.from_numpy(padded_test), torch.from_numpy(np.asarray([1])).long(),
+    )
+    test_loader = DataLoader(
+        dataset=test_set, batch_size=512, num_workers=n_cpus, shuffle=False
+    )
+    preds_t, word_attn_t, sent_attn_t = get_predictions_and_attn_weights(HAN_model, test_loader)
+
+    not_mis = F.softmax(torch.cat(preds_t), 1).cpu().numpy().tolist()[0][0]
+    mis = F.softmax(torch.cat(preds_t), 1).cpu().numpy().tolist()[0][1]
+
+    if not_mis>mis:
         org_class = "Not Misinformation"
-        org_prob = org_vals[0]
+        org_prob = not_mis
     else:
         org_class = "Misinformation"
-        org_prob = org_vals[1]
+        org_prob = mis
+
+
 
     com1 = data_dic[id]['com1']
     com2 = data_dic[id]['com2']
@@ -525,25 +831,95 @@ def predict():
 
 
 
-    article = nltk.word_tokenize(art)
-    comment = [nltk.word_tokenize(each_comment)  for each_comment in comment]
+    # article = nltk.word_tokenize(art)
+    # comment = [nltk.word_tokenize(each_comment)  for each_comment in comment]
 
-    article = tokens_to_tensor(article, word2idx_dict, one_long=True).view(1, -1).to(device)
-    comment = tokens_to_tensor(comment, word2idx_dict).to(device)
+    # article = tokens_to_tensor(article, word2idx_dict, one_long=True).view(1, -1).to(device)
+    # comment = tokens_to_tensor(comment, word2idx_dict).to(device)
 
-    # preprocessing before the embedding
-    article = F.one_hot(article, len(word2idx_dict)).float()
-    comment = F.one_hot(comment, len(word2idx_dict)).float()
-    ret = F.softmax(clf_seq([article, comment]))
-    class_vals = ret.detach().numpy()[0]
+    # # preprocessing before the embedding
+    # article = F.one_hot(article, len(word2idx_dict)).float()
+    # comment = F.one_hot(comment, len(word2idx_dict)).float()
+    # ret = F.softmax(clf_seq([article, comment]))
+    # class_vals = ret.detach().numpy()[0]
+
+    tok_func = spacy.load("en_core_web_sm")
+    n_cpus = os.cpu_count()
+    bsz = 100
+    texts_sents = []
+    com_sents = []
+    for doc in tok_func.pipe(art, n_process=n_cpus, batch_size=bsz):
+        sents = [str(s) for s in list(doc.sents)]
+        texts_sents.append(sents)
+
+    for val in tok_func.pipe(org_comments, n_process=n_cpus, batch_size=bsz):
+        coms = [str(s) for s in list(val.sents)]
+        com_sents.append(coms)
+
+    fin = []
+    for i in range(len(com_sents)):
+        fin.append(texts_sents[i][:7-len(com_sents[-min(5,len(com_sents[i])):])]+com_sents[i][-min(5,len(com_sents[i])):])
+
+
+    testt = [fin]
+    print(testt)
+
+    new_vals = []
+    for i in range(len(testt[0])):
+        if i != 5:
+            new_vals.append(testt[0][i])
+
+    new_vals.append(new_comm)
+    neww = [new_vals]
+
+
+    all_sents = [s for sents in neww for s in sents]
+    texts_length = [0] + [len(s) for s in neww]
+    range_idx = [sum(texts_length[: i + 1]) for i in range(len(texts_length))]
+
+    sents_tokens = Tokenizer().process_all(all_sents)
+
+    sents_length = [len(s) for s in sents_tokens]
+
+    vocab = Vocab.create(sents_tokens, max_vocab=5000, min_freq=5)
+
+    sents_numz = [vocab.numericalize(s) for s in sents_tokens]
+
+    texts_numz = [sents_numz[range_idx[i] : range_idx[i + 1]] for i in range(len(range_idx[:-1]))]
+
+    q=0.8
+    maxlen_sent = int(np.quantile(sents_length, q=q))
+    maxlen_doc  = int(np.quantile(texts_length[1:], q=q))
+
+    padded_test = np.stack([pad_nested_sequences(r, maxlen_sent, maxlen_doc) for r in texts_numz], axis=0)
+
+
+    test_set = TensorDataset(
+        torch.from_numpy(padded_test), torch.from_numpy(np.asarray([1])).long(),
+    )
+    test_loader = DataLoader(
+        dataset=test_set, batch_size=512, num_workers=n_cpus, shuffle=False
+    )
+    preds_t, word_attn_t, sent_attn_t = get_predictions_and_attn_weights(HAN_model, test_loader)
+
+    not_mis = F.softmax(torch.cat(preds_t), 1).cpu().numpy().tolist()[0][0]
+    mis = F.softmax(torch.cat(preds_t), 1).cpu().numpy().tolist()[0][1]
+
+
+
+
+
+
+
+
     
 
-    if class_vals[0]>class_vals[1]:
+    if not_mis>mis:
         coms = "Not Misinformation"
-        probab = class_vals[0]
+        probab = not_mis
     else:
         coms = "Misinformation"
-        probab = class_vals[1]
+        probab = mis
 
 
     if id in prediction_text[session['user']]:
@@ -572,21 +948,63 @@ def predict():
     else:
         one_relevancy_score[session['user']][id] = [one_relevancy_scoree]
 
-    org_comment = [nltk.word_tokenize(each_comment)  for each_comment in org_comments]
+    # org_comment = [nltk.word_tokenize(each_comment)  for each_comment in org_comments]
 
 
-    org_comment = tokens_to_tensor(org_comment, word2idx_dict).to(device)
+    # org_comment = tokens_to_tensor(org_comment, word2idx_dict).to(device)
 
 
-    org_comment = F.one_hot(org_comment, len(word2idx_dict)).float()
-    org_ret = F.softmax(clf_seq([article, org_comment]))
-    org_vals = org_ret.detach().numpy()[0]
-    if org_vals[0]>org_vals[1]:
+    # org_comment = F.one_hot(org_comment, len(word2idx_dict)).float()
+    # org_ret = F.softmax(clf_seq([article, org_comment]))
+    # org_vals = org_ret.detach().numpy()[0]
+    # if org_vals[0]>org_vals[1]:
+    #     org_class = "Not Misinformation"
+    #     org_prob = org_vals[0]
+    # else:
+    #     org_class = "Misinformation"
+    #     org_prob = org_vals[1]
+
+
+    all_sents = [s for sents in testt for s in sents]
+    texts_length = [0] + [len(s) for s in testt]
+    range_idx = [sum(texts_length[: i + 1]) for i in range(len(texts_length))]
+
+    sents_tokens = Tokenizer().process_all(all_sents)
+
+    sents_length = [len(s) for s in sents_tokens]
+
+    vocab = Vocab.create(sents_tokens, max_vocab=5000, min_freq=5)
+
+    sents_numz = [vocab.numericalize(s) for s in sents_tokens]
+
+    texts_numz = [sents_numz[range_idx[i] : range_idx[i + 1]] for i in range(len(range_idx[:-1]))]
+
+    q=0.8
+    maxlen_sent = int(np.quantile(sents_length, q=q))
+    maxlen_doc  = int(np.quantile(texts_length[1:], q=q))
+
+    padded_test = np.stack([pad_nested_sequences(r, maxlen_sent, maxlen_doc) for r in texts_numz], axis=0)
+
+
+    test_set = TensorDataset(
+        torch.from_numpy(padded_test), torch.from_numpy(np.asarray([1])).long(),
+    )
+    test_loader = DataLoader(
+        dataset=test_set, batch_size=512, num_workers=n_cpus, shuffle=False
+    )
+    preds_t, word_attn_t, sent_attn_t = get_predictions_and_attn_weights(HAN_model, test_loader)
+
+    not_mis = F.softmax(torch.cat(preds_t), 1).cpu().numpy().tolist()[0][0]
+    mis = F.softmax(torch.cat(preds_t), 1).cpu().numpy().tolist()[0][1]
+
+
+    if not_mis>mis:
         org_class = "Not Misinformation"
-        org_prob = org_vals[0]
+        org_prob = not_mis
     else:
         org_class = "Misinformation"
-        org_prob = org_vals[1]
+        org_prob = mis
+
 
     # print(session['userlist'])
     
