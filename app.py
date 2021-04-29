@@ -19,7 +19,7 @@ from sklearn.decomposition import LatentDirichletAllocation
 from scipy.spatial.distance import cosine
 
 from torch.autograd import Variable
-import dill
+# import dill
 import spacy
 # spacy.load('en')
 if_linear_embedding = True
