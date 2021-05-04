@@ -19,7 +19,7 @@ from sklearn.decomposition import LatentDirichletAllocation
 from scipy.spatial.distance import cosine
 
 from torch.autograd import Variable
-# import dill
+
 import spacy
 # spacy.load('en')
 if_linear_embedding = True
@@ -31,7 +31,7 @@ import pickle
 
 
 
-# HAN_vocab = dill.load(open("vocab.pickle", "rb"))
+
 
 
 import numpy as np
@@ -40,7 +40,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from fastai.text import Tokenizer, Vocab
-# from fastai.text.all import *
+
 
 from torch.utils.data import TensorDataset, DataLoader
 
