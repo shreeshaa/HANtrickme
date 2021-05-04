@@ -59,4 +59,4 @@ jobs:
         with:
           app-name: 'trickmeHAN'
           slot-name: 'production'
-          publish-profile: ${{ secrets.AzureAppService_PublishProfile_1d6faf837bcc4dd1bae48d8ca16f121d }}
+          publish-profile: ${{ secrets.AzureAppService_PublishProfile_1dc1165af7274e9f9ee96dc47e1df74d }}
